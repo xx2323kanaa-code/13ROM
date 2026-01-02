@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<title>Hand ROM Analyzer – FINAL ALL IN ONE</title>
+<title>Hand ROM Analyzer – ALL IN ONE (12ROMn v2.3)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <style>
 body{background:#111;color:#eee;font-family:system-ui;margin:0;padding:16px;}
-h1{font-size:18px;margin-bottom:8px;}
-#hud{position:fixed;top:8px;left:8px;font-size:11px;color:#9f9;max-width:90vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-#build{position:fixed;top:26px;left:8px;font-size:10px;color:#6f6;max-width:90vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+h1{font-size:18px;margin:0 0 8px 0;}
+#hud{position:fixed;top:8px;left:8px;font-size:11px;color:#9f9;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#build{position:fixed;top:26px;left:8px;font-size:10px;color:#6f6;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #controls{margin-bottom:12px;}
 button{padding:10px;border-radius:8px;background:#333;color:#fff;border:none;margin:4px;}
 button:hover{background:#555;}
@@ -17,12 +17,12 @@ button:hover{background:#555;}
 table{width:100%;border-collapse:collapse;font-size:12px;}
 td,th{border:1px solid #555;padding:4px;text-align:center;}
 small{color:#bbb;}
+hr{border:0;border-top:1px solid #333;margin:8px 0;}
 </style>
 </head>
-
 <body>
 
-<h1>手指ROM解析（最終安定版・角度決定ロジック込み）</h1>
+<h1>手指ROM解析（全部入り・安定 v2.3）</h1>
 
 <div id="controls">
 <b>指グループ</b><br>
@@ -32,8 +32,9 @@ small{color:#bbb;}
 
 <input type="file" id="videoInput" accept="video/*"><br><br>
 
-<button onclick="startAnalyze('EXT_OK')">伸展可能</button>
-<button onclick="startAnalyze('EXT_NG')">伸展不能</button>
+<!-- ここはあなたのUI流儀（safeAnalyze）に合わせる -->
+<button onclick="UI_call('EXT_OK')">伸展可能</button>
+<button onclick="UI_call('EXT_NG')">伸展不能</button>
 <button onclick="toggleJOA()">JOA参考</button>
 <button onclick="copyLog()">ログコピー</button>
 </div>
@@ -58,14 +59,14 @@ small{color:#bbb;}
 
 <script>
 /* =========================
-   VERSION / BUILD (必ずログ残す)
+   強制識別（これが出ないなら別ファイル）
 ========================= */
-const VERSION="12ROMn_ALLINONE_FINAL_v2.2_anglefix";
-const BUILD=new Date().toISOString();
-document.getElementById("build").innerText = VERSION + " / " + BUILD;
+const INDEX_ID = "INDEX_ALLINONE_12ROMn_v2.3_ANGLEFIX";
+const BUILD = new Date().toISOString();
+document.getElementById("build").innerText = `INDEX-ID: ${INDEX_ID} / BUILD: ${BUILD}`;
 
 /* =========================
-   LOG (失敗時フォールバック付き)
+   LOG（必ず取れる）
 ========================= */
 let LOG=[];
 function log(m){
@@ -73,10 +74,11 @@ function log(m){
   const line=`[${t}] ${m}`;
   LOG.push(line);
   document.getElementById("hud").innerText=m;
+  // consoleにも出す（PCで確認用）
+  try{ console.log(line); }catch(e){}
 }
 function copyLog(){
   const text = LOG.join("\n");
-  // まず clipboard
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).then(
       ()=>alert("ログをコピーしました"),
@@ -87,7 +89,6 @@ function copyLog(){
   }
 }
 function fallbackCopy(text){
-  // 失敗しても必ずユーザーが取れる
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position="fixed";
@@ -97,9 +98,8 @@ function fallbackCopy(text){
   ta.style.height="45vh";
   ta.style.zIndex="9999";
   document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
-  alert("クリップボードに失敗しました。表示したテキストを長押し/コピーしてください。");
+  ta.focus(); ta.select();
+  alert("クリップボードに失敗しました。表示したログを手動でコピーしてください。");
 }
 function toggleJOA(){
   const p=document.getElementById("joaPanel");
@@ -107,57 +107,50 @@ function toggleJOA(){
 }
 
 /* =========================
-   Video / Canvas
+   Video / Canvas / Hands
 ========================= */
-const video=document.createElement("video");
-video.muted=true;
-video.playsInline=true;
-video.loop=true;
+const video = document.createElement("video");
+video.muted = true;
+video.playsInline = true;
+video.loop = true;
 
-const canvas=document.createElement("canvas");
-const ctx=canvas.getContext("2d");
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d");
 
-/* =========================
-   MediaPipe Hands
-========================= */
-const hands=new Hands({
-  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+const hands = new Hands({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
 hands.setOptions({
-  maxNumHands:1,
-  modelComplexity:1,
-  minDetectionConfidence:0.5,
-  minTrackingConfidence:0.5
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
 });
 
-/* =========================
-   Landmark storage
-   - 取りすぎると重いので上限を決める
-========================= */
-let landmarksAll=[];
-const MAX_FRAMES = 120; // 約4秒(30fps想定)分くらい
+/* ===== Landmark buffer ===== */
+let landmarkBuffer = [];
+const MAX_FRAMES = 120;
+
 hands.onResults(res=>{
   if(res.multiHandLandmarks && res.multiHandLandmarks[0]){
-    landmarksAll.push(res.multiHandLandmarks[0]);
-    if(landmarksAll.length > MAX_FRAMES) landmarksAll.shift();
+    landmarkBuffer.push(res.multiHandLandmarks[0]);
+    if(landmarkBuffer.length > MAX_FRAMES) landmarkBuffer.shift();
   }
 });
 
-/* =========================
-   Frame loop
-========================= */
-let running=false;
+/* ===== Frame loop ===== */
+let running = false;
 async function startLoop(){
   if(running) return;
-  running=true;
+  running = true;
   log("frame loop started");
   while(running){
-    if(video.readyState>=2){
-      canvas.width=video.videoWidth||640;
-      canvas.height=video.videoHeight||480;
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    if(video.readyState >= 2){
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       try{
-        await hands.send({image:canvas});
+        await hands.send({image: canvas});
       }catch(e){
         log("hands.send failed");
       }
@@ -167,40 +160,57 @@ async function startLoop(){
 }
 
 /* =========================
-   Analyze start (setTimeout撤廃)
+   UI → safeAnalyze互換
+========================= */
+function UI_call(mode){
+  const file=document.getElementById("videoInput").files[0];
+  if(!file){ log("no video"); return; }
+
+  // グループはボタン押下時点で読む（あなたの運用）
+  window.selectedGroup =
+    document.querySelector('input[name="group"]:checked').value;
+
+  // 同じ動画で測り直す時もあるので、必要に応じてクリア
+  // EXT_OK / EXT_NG 切替ではバッファを維持しても良いが、まずは確実性優先で維持
+  // landmarkBuffer = []; ←必要ならここをONにする（いまはOFF）
+
+  // 動画がまだロードされてなければロード開始
+  if(!video.src || video.src.startsWith("blob:")===false){
+    video.src = URL.createObjectURL(file);
+    video.onloadeddata = async ()=>{
+      try{ await video.play(); }catch(e){ log("ERROR: video.play blocked"); return; }
+      startLoop();
+      log("index initialized: video & hands ready");
+      log(`UI call → safeAnalyze(${mode})`);
+      safeAnalyze(mode);
+    };
+  }else{
+    // すでにロード済み
+    log(`UI call → safeAnalyze(${mode})`);
+    safeAnalyze(mode);
+  }
+}
+
+/* =========================
+   safeAnalyze / analyze
+   - setTimeoutで決め打ちしない
    - framesが溜まるまで待つ
 ========================= */
 let analyzing=false;
 
-function startAnalyze(mode){
-  const file=document.getElementById("videoInput").files[0];
-  if(!file){log("no video");return;}
-  if(analyzing){log("busy: analyzing");return;}
-
+function safeAnalyze(mode){
+  if(analyzing){ log("busy: analyzing"); return; }
   analyzing=true;
-  landmarksAll=[];
-
-  video.src=URL.createObjectURL(file);
-
-  video.onloadeddata=async()=>{
-    try{
-      await video.play();
-    }catch(e){
-      log("ERROR: video.play blocked");
-      analyzing=false;
-      return;
-    }
-    startLoop();
-    waitForFramesThenAnalyze(mode);
-  };
+  log("--------------------------------------------------");
+  analyze_when_ready(mode);
 }
 
-function waitForFramesThenAnalyze(mode){
+function analyze_when_ready(mode){
   let tries=0;
-  const need = 20; // 最低必要フレーム
+  const need=20;
   const timer=setInterval(()=>{
     tries++;
-    const n=landmarksAll.length;
+    const n=landmarkBuffer.length;
     if(n>=need){
       clearInterval(timer);
       log(`analyze start ${mode} (frames=${n})`);
@@ -218,60 +228,56 @@ function waitForFramesThenAnalyze(mode){
 }
 
 /* =========================
-   Angle selection core (角度の決め方を変更)
-   - 指ごとに「伸展フレーム」と「屈曲フレーム」を決める
-   - ROM = flexFrame - extFrame
+   角度ロジック（あなたの要望）
+   - 指ごとに「最伸展(合計最小)」と「最屈曲(合計最大)」を確定
+   - ROM = flex - ext を各関節で出す
+   - EXT_NGでもROMは出す（TAMは参考で併記）
 ========================= */
 function analyze(mode){
-  const group=document.querySelector('input[name="group"]:checked').value;
-  const fingers = group==="thumb"
-    ? {index:[5,6,7,8], middle:[9,10,11,12]}
-    : {ring:[13,14,15,16], pinky:[17,18,19,20]};
-
-  if(landmarksAll.length < 5){
+  const frames = landmarkBuffer;
+  if(!frames || frames.length < 5){
     log("frames不足");
     return;
   }
 
-  let html = `<div><small>${VERSION} / ${BUILD}</small></div><hr style="border:0;border-top:1px solid #333;margin:8px 0;">`;
+  const group = window.selectedGroup || "thumb";
+  const fingers = (group==="thumb")
+    ? { index:[5,6,7,8], middle:[9,10,11,12] }
+    : { ring:[13,14,15,16], pinky:[17,18,19,20] };
+
+  let html = `<div><small>${INDEX_ID} / ${BUILD}</small></div><hr>`;
 
   for(const [name,ids] of Object.entries(fingers)){
-    // 各フレームで角度を計算し、指の合計屈曲角でext/flexフレームを選ぶ
-    let bestExt = null;   // {score, m, p, d}
-    let bestFlex = null;  // {score, m, p, d}
+    let bestExt=null;   // score(min)
+    let bestFlex=null;  // score(max)
 
-    for(const lm of landmarksAll){
-      const m = flex(lm[0], lm[ids[0]], lm[ids[1]]);        // MCP
-      const p = flex(lm[ids[0]], lm[ids[1]], lm[ids[2]]);  // PIP
-      const d = flex(lm[ids[1]], lm[ids[2]], lm[ids[3]]);  // DIP
-      const score = m + p + d; // 合計屈曲角
+    for(const lm of frames){
+      const m = flex(lm[0], lm[ids[0]], lm[ids[1]]);
+      const p = flex(lm[ids[0]], lm[ids[1]], lm[ids[2]]);
+      const d = flex(lm[ids[1]], lm[ids[2]], lm[ids[3]]);
+      const score = m+p+d;
 
-      const pack = {score, m, p, d};
-      if(!bestExt || score < bestExt.score) bestExt = pack;     // 最小=最伸展
-      if(!bestFlex || score > bestFlex.score) bestFlex = pack;  // 最大=最屈曲
+      const pack={score,m,p,d};
+      if(!bestExt || score < bestExt.score) bestExt = pack;
+      if(!bestFlex || score > bestFlex.score) bestFlex = pack;
     }
 
     if(!bestExt || !bestFlex){
-      html += `<b>${name}</b><br>解析失敗（フレーム不足）<br><br>`;
+      html += `<b>${name}</b><br>解析失敗<br><br>`;
       continue;
     }
 
-    // ROM（各関節）
     const mROM = clamp(bestFlex.m - bestExt.m, 0, 180);
     const pROM = clamp(bestFlex.p - bestExt.p, 0, 180);
     const dROM = clamp(bestFlex.d - bestExt.d, 0, 180);
-
-    const tam = mROM + pROM + dROM;
+    const TAM = mROM+pROM+dROM;
 
     html += `<b>${name}</b><br>`;
-    // EXT_OKでもEXT/FLEX値を見える化（あなたのデバッグ要求）
-    html += `伸展基準（最小）: MCP ${bestExt.m.toFixed(1)}° / PIP ${bestExt.p.toFixed(1)}° / DIP ${bestExt.d.toFixed(1)}°<br>`;
-    html += `屈曲基準（最大）: MCP ${bestFlex.m.toFixed(1)}° / PIP ${bestFlex.p.toFixed(1)}° / DIP ${bestFlex.d.toFixed(1)}°<br>`;
+    html += `伸展基準: MCP ${bestExt.m.toFixed(1)}° / PIP ${bestExt.p.toFixed(1)}° / DIP ${bestExt.d.toFixed(1)}°<br>`;
+    html += `屈曲基準: MCP ${bestFlex.m.toFixed(1)}° / PIP ${bestFlex.p.toFixed(1)}° / DIP ${bestFlex.d.toFixed(1)}°<br>`;
     html += `<b>ROM</b>: MCP ${mROM.toFixed(1)}° / PIP ${pROM.toFixed(1)}° / DIP ${dROM.toFixed(1)}°<br>`;
-
-    // 伸展不能モードはTAMを「参考として」併記（欲張らない方針に従い、ROM主）
     if(mode==="EXT_NG"){
-      html += `総運動角（TAM, 参考）：${tam.toFixed(1)}°<br>`;
+      html += `総運動角(TAM,参考): ${TAM.toFixed(1)}°<br>`;
     }
     html += `<br>`;
   }
@@ -282,7 +288,6 @@ function analyze(mode){
 
 /* =========================
    Geometry
-   - MediaPipeの外角(直線=180)を屈曲角に変換
 ========================= */
 function flex(a,b,c){
   return clamp(180 - raw(a,b,c), 0, 180);
@@ -293,19 +298,17 @@ function raw(a,b,c){
   const dot=v1.x*v2.x+v1.y*v2.y+v1.z*v2.z;
   const m=Math.hypot(v1.x,v1.y,v1.z)*Math.hypot(v2.x,v2.y,v2.z);
   if(!m) return 0;
-  const cos = clamp(dot/m, -1, 1);
-  return Math.acos(cos)*180/Math.PI;
+  return Math.acos(clamp(dot/m, -1, 1))*180/Math.PI;
 }
 function clamp(v,min,max){ return Math.min(max, Math.max(min, v)); }
 
 /* =========================
-   Boot log (キャッシュ識別に必須)
+   Boot (識別用ログ)
 ========================= */
 log("index initialized");
-log(`VERSION=${VERSION}`);
+log(`INDEX-ID=${INDEX_ID}`);
 log(`BUILD=${BUILD}`);
 log(`UA=${navigator.userAgent}`);
 </script>
-
 </body>
 </html>
