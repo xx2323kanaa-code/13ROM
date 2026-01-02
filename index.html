@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<title>Hand ROM Analyzer – ALL IN ONE (12ROMn)</title>
+<title>Hand ROM Analyzer – FINAL ALL IN ONE</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
 <style>
@@ -22,7 +22,7 @@ td,th{border:1px solid #555;padding:4px;text-align:center;}
 
 <body>
 
-<h1>手指ROM解析（動画・全部入り安定版）</h1>
+<h1>手指ROM解析（最終安定版）</h1>
 
 <div id="controls">
 <b>指グループ</b><br>
@@ -57,87 +57,134 @@ td,th{border:1px solid #555;padding:4px;text-align:center;}
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
 <script>
-/* =====================================================
-   Hand ROM Analyzer – ROM FIXED
-   ALL-IN-ONE ANALYZE CORE
-   ===================================================== */
+/* ===== BUILD ===== */
+const VERSION="12ROMn_FINAL_v2.0";
+const BUILD=new Date().toISOString();
+document.getElementById("build").innerText=VERSION+" / "+BUILD;
 
-const ANALYZE_VERSION = "ROM_FIXED_v2.0";
-log("Analyze core loaded : " + ANALYZE_VERSION);
+/* ===== LOG ===== */
+let LOG=[];
+function log(m){
+  const t=new Date().toLocaleTimeString();
+  LOG.push(`[${t}] ${m}`);
+  document.getElementById("hud").innerText=m;
+}
+function copyLog(){navigator.clipboard.writeText(LOG.join("\n"));}
+function toggleJOA(){
+  const p=document.getElementById("joaPanel");
+  p.style.display=p.style.display==="none"?"block":"none";
+}
 
-/* ===== Analyze Entry ===== */
+/* ===== Video / Canvas ===== */
+const video=document.createElement("video");
+video.muted=true; video.playsInline=true;
+const canvas=document.createElement("canvas");
+const ctx=canvas.getContext("2d");
+
+/* ===== MediaPipe ===== */
+const hands=new Hands({
+  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+hands.setOptions({
+  maxNumHands:1,
+  modelComplexity:1,
+  minDetectionConfidence:0.5,
+  minTrackingConfidence:0.5
+});
+
+/* ===== Landmark storage ===== */
+let landmarksAll=[];
+hands.onResults(res=>{
+  if(res.multiHandLandmarks){
+    landmarksAll.push(res.multiHandLandmarks[0]);
+  }
+});
+
+/* ===== Frame loop ===== */
+let running=false;
+async function startLoop(){
+  if(running) return;
+  running=true;
+  log("frame loop started");
+  while(running){
+    if(video.readyState>=2){
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0);
+      await hands.send({image:canvas});
+    }
+    await new Promise(r=>setTimeout(r,33));
+  }
+}
+
+/* ===== Analyze ===== */
+function startAnalyze(mode){
+  const file=document.getElementById("videoInput").files[0];
+  if(!file){log("no video");return;}
+  landmarksAll=[];
+  video.src=URL.createObjectURL(file);
+  video.onloadeddata=async()=>{
+    await video.play();
+    startLoop();
+    setTimeout(()=>analyze(mode),2000);
+  };
+}
+
 function analyze(mode){
-  log(`analyze start ${mode}`);
-
-  if(buffer.length < 10){
+  if(landmarksAll.length<10){
     log("frames不足");
     return;
   }
 
-  const group = document.querySelector('input[name="group"]:checked').value;
+  const group=document.querySelector('input[name="group"]:checked').value;
+  const fingers = group==="thumb"
+   ? {index:[5,6,7,8],middle:[9,10,11,12]}
+   : {ring:[13,14,15,16],pinky:[17,18,19,20]};
 
-  const fingers = (group === "thumb")
-    ? { index:[5,6,7,8], middle:[9,10,11,12] }
-    : { ring:[13,14,15,16], pinky:[17,18,19,20] };
-
-  let html = "";
-
-  for(const [name, ids] of Object.entries(fingers)){
-
-    let MCP = [], PIP = [], DIP = [];
-
-    for(const lm of buffer){
-      MCP.push(flex(lm[0], lm[ids[0]], lm[ids[1]]));
-      PIP.push(flex(lm[ids[0]], lm[ids[1]], lm[ids[2]]));
-      DIP.push(flex(lm[ids[1]], lm[ids[2]], lm[ids[3]]));
+  let html="";
+  for(const [name,ids] of Object.entries(fingers)){
+    let MCP=[],PIP=[],DIP=[];
+    for(const lm of landmarksAll){
+      MCP.push(flex(lm[0],lm[ids[0]],lm[ids[1]]));
+      PIP.push(flex(lm[ids[0]],lm[ids[1]],lm[ids[2]]));
+      DIP.push(flex(lm[ids[1]],lm[ids[2]],lm[ids[3]]));
     }
+    const mMin=Math.min(...MCP),mMax=Math.max(...MCP);
+    const pMin=Math.min(...PIP),pMax=Math.max(...PIP);
+    const dMin=Math.min(...DIP),dMax=Math.max(...DIP);
 
-    const mMin = Math.min(...MCP), mMax = Math.max(...MCP);
-    const pMin = Math.min(...PIP), pMax = Math.max(...PIP);
-    const dMin = Math.min(...DIP), dMax = Math.max(...DIP);
+    const mROM=mMax-mMin;
+    const pROM=pMax-pMin;
+    const dROM=dMax-dMin;
 
-    const mROM = mMax - mMin;
-    const pROM = pMax - pMin;
-    const dROM = dMax - dMin;
-
-    html += `<b>${name}</b><br>`;
-
-    html += `
-      MCP：伸展 ${mMin.toFixed(1)}° / 屈曲 ${mMax.toFixed(1)}°
-      （ROM ${mROM.toFixed(1)}°）<br>
-      PIP：伸展 ${pMin.toFixed(1)}° / 屈曲 ${pMax.toFixed(1)}°
-      （ROM ${pROM.toFixed(1)}°）<br>
-      DIP：伸展 ${dMin.toFixed(1)}° / 屈曲 ${dMax.toFixed(1)}°
-      （ROM ${dROM.toFixed(1)}°）<br>
-    `;
-
-    if(mode === "EXT_NG"){
-      const TAM = mROM + pROM + dROM;
-      html += `総運動角（TAM）：${TAM.toFixed(1)}°<br>`;
+    if(mode==="EXT_OK"){
+      html+=`<b>${name}</b><br>
+      MCP ${mROM.toFixed(1)}° / PIP ${pROM.toFixed(1)}° / DIP ${dROM.toFixed(1)}°<br><br>`;
+    }else{
+      html+=`<b>${name}</b><br>
+      MCP ${mROM.toFixed(1)}° / PIP ${pROM.toFixed(1)}° / DIP ${dROM.toFixed(1)}°<br>
+      総運動角(TAM)：${(mROM+pROM+dROM).toFixed(1)}°<br><br>`;
     }
-
-    html += `<br>`;
   }
-
-  document.getElementById("result").innerHTML = html;
+  document.getElementById("result").innerHTML=html;
   log("analysis finished");
 }
 
 /* ===== Geometry ===== */
 function flex(a,b,c){
-  return Math.max(0, 180 - raw(a,b,c));
+  return Math.max(0,180-raw(a,b,c));
 }
-
 function raw(a,b,c){
   const v1={x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};
   const v2={x:c.x-b.x,y:c.y-b.y,z:c.z-b.z};
   const dot=v1.x*v2.x+v1.y*v2.y+v1.z*v2.z;
-  const mag=Math.hypot(v1.x,v1.y,v1.z)*Math.hypot(v2.x,v2.y,v2.z);
-  if(!mag) return 0;
-  return Math.acos(Math.min(1,Math.max(-1,dot/mag))) * 180/Math.PI;
+  const m=Math.hypot(v1.x,v1.y,v1.z)*Math.hypot(v2.x,v2.y,v2.z);
+  if(!m) return 0;
+  return Math.acos(Math.min(1,Math.max(-1,dot/m)))*180/Math.PI;
 }
+
+log("index initialized");
 </script>
-  
 
 </body>
 </html>
