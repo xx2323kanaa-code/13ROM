@@ -57,16 +57,17 @@ td,th{border:1px solid #555;padding:4px;text-align:center;}
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
 <script>
-/* ===== 基本情報 ===== */
+/* ===== VERSION INFO ===== */
+const VERSION = "ALLINONE_12ROMn_v1.2_WAITBUFFER";
 const BUILD = new Date().toISOString();
-const VERSION = "ALLINONE_12ROMn_v1.1_JOA";
 document.getElementById("build").innerText = VERSION + " / " + BUILD;
 
 /* ===== LOG ===== */
 let LOG=[];
 function log(m){
   const t=new Date().toLocaleTimeString();
-  LOG.push(`[${t}] ${m}`);
+  const s=`[${t}] ${m}`;
+  LOG.push(s);
   document.getElementById("hud").innerText=m;
 }
 function copyLog(){navigator.clipboard.writeText(LOG.join("\n"));}
@@ -118,7 +119,18 @@ async function startLoop(){
   }
 }
 
-/* ===== Analyze ===== */
+/* ===== WAIT BUFFER (核心) ===== */
+function waitAndAnalyze(mode){
+  if(buffer.length >= 15){
+    log(`analyze start ${mode} (frames=${buffer.length})`);
+    analyze(mode);
+  }else{
+    log(`buffer waiting... ${buffer.length}`);
+    setTimeout(()=>waitAndAnalyze(mode),300);
+  }
+}
+
+/* ===== Start Analyze ===== */
 function startAnalyze(mode){
   const file=document.getElementById("videoInput").files[0];
   if(!file){log("no video");return;}
@@ -127,14 +139,12 @@ function startAnalyze(mode){
   video.onloadeddata=async()=>{
     await video.play();
     startLoop();
-    setTimeout(()=>analyze(mode),2000);
+    waitAndAnalyze(mode);
   };
 }
 
+/* ===== Analyze Core ===== */
 function analyze(mode){
-  log("analyze start "+mode);
-  if(buffer.length<15){log("frames不足");return;}
-
   const group=document.querySelector('input[name="group"]:checked').value;
   const fingers = group==="thumb"
    ? {index:[5,6,7,8],middle:[9,10,11,12]}
