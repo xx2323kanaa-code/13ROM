@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<title>Hand ROM Analyzer – ALL IN ONE (12ROMn)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<style>
+body{background:#111;color:#eee;font-family:system-ui;margin:0;padding:16px;}
+h1{font-size:18px;margin-bottom:8px;}
+#hud{position:fixed;top:8px;left:8px;font-size:11px;color:#9f9;}
+#build{position:fixed;top:24px;left:8px;font-size:10px;color:#6f6;}
+#controls{margin-bottom:12px;}
+button{padding:10px;border-radius:8px;background:#333;color:#fff;border:none;margin:4px;}
+button:hover{background:#555;}
+#result{margin-top:12px;background:#1c1c1c;padding:10px;border-radius:8px;}
+#joaPanel{display:none;background:#222;padding:10px;border-radius:8px;margin-top:10px;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+td,th{border:1px solid #555;padding:4px;text-align:center;}
+</style>
+</head>
+
+<body>
+
+<h1>手指ROM解析（動画・全部入り安定版）</h1>
+
+<div id="controls">
+<b>指グループ</b><br>
+<label><input type="radio" name="group" value="thumb" checked> 親指側（示・中）</label>
+<label style="margin-left:8px;"><input type="radio" name="group" value="pinky"> 小指側（薬・小）</label>
+<br><br>
+
+<input type="file" id="videoInput" accept="video/*"><br><br>
+
+<button onclick="startAnalyze('EXT_OK')">伸展可能</button>
+<button onclick="startAnalyze('EXT_NG')">伸展不能</button>
+<button onclick="toggleJOA()">JOA参考</button>
+<button onclick="copyLog()">ログコピー</button>
+</div>
+
+<div id="result">動画を選択してください</div>
+
+<div id="joaPanel">
+<b>JOA 手指ROM（参考）</b>
+<table>
+<tr><th>指</th><th>MCP</th><th>PIP</th><th>DIP</th></tr>
+<tr><td>示指</td><td>90</td><td>100</td><td>70</td></tr>
+<tr><td>中指</td><td>90</td><td>100</td><td>70</td></tr>
+<tr><td>薬指</td><td>90</td><td>100</td><td>70</td></tr>
+<tr><td>小指</td><td>90</td><td>100</td><td>70</td></tr>
+</table>
+</div>
+
+<div id="hud"></div>
+<div id="build"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+<script>
+/* ===== 基本情報 ===== */
+const BUILD = new Date().toISOString();
+const VERSION = "ALLINONE_12ROMn_v1.1_JOA";
+document.getElementById("build").innerText = VERSION + " / " + BUILD;
+
+/* ===== LOG ===== */
+let LOG=[];
+function log(m){
+  const t=new Date().toLocaleTimeString();
+  LOG.push(`[${t}] ${m}`);
+  document.getElementById("hud").innerText=m;
+}
+function copyLog(){navigator.clipboard.writeText(LOG.join("\n"));}
+function toggleJOA(){
+  const p=document.getElementById("joaPanel");
+  p.style.display=p.style.display==="none"?"block":"none";
+}
+
+/* ===== Video & Hands ===== */
+const video=document.createElement("video");
+video.muted=true; video.playsInline=true;
+
+const canvas=document.createElement("canvas");
+const ctx=canvas.getContext("2d");
+
+const hands=new Hands({
+  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+hands.setOptions({
+  maxNumHands:1,
+  modelComplexity:1,
+  minDetectionConfidence:0.5,
+  minTrackingConfidence:0.5
+});
+
+/* ===== Landmark buffer ===== */
+let buffer=[];
+hands.onResults(res=>{
+  if(res.multiHandLandmarks){
+    buffer.push(res.multiHandLandmarks[0]);
+    if(buffer.length>40) buffer.shift();
+  }
+});
+
+/* ===== Frame Loop ===== */
+let running=false;
+async function startLoop(){
+  if(running) return;
+  running=true;
+  log("frame loop started");
+  while(running){
+    if(video.readyState>=2){
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0);
+      await hands.send({image:canvas});
+    }
+    await new Promise(r=>setTimeout(r,33));
+  }
+}
+
+/* ===== Analyze ===== */
+function startAnalyze(mode){
+  const file=document.getElementById("videoInput").files[0];
+  if(!file){log("no video");return;}
+  buffer=[];
+  video.src=URL.createObjectURL(file);
+  video.onloadeddata=async()=>{
+    await video.play();
+    startLoop();
+    setTimeout(()=>analyze(mode),2000);
+  };
+}
+
+function analyze(mode){
+  log("analyze start "+mode);
+  if(buffer.length<15){log("frames不足");return;}
+
+  const group=document.querySelector('input[name="group"]:checked').value;
+  const fingers = group==="thumb"
+   ? {index:[5,6,7,8],middle:[9,10,11,12]}
+   : {ring:[13,14,15,16],pinky:[17,18,19,20]};
+
+  let html="";
+  for(const [name,ids] of Object.entries(fingers)){
+    const rawsM=[], rawsP=[], rawsD=[];
+    for(const lm of buffer){
+      rawsM.push(raw(lm[0],lm[ids[0]],lm[ids[1]]));
+      rawsP.push(raw(lm[ids[0]],lm[ids[1]],lm[ids[2]]));
+      rawsD.push(raw(lm[ids[1]],lm[ids[2]],lm[ids[3]]));
+    }
+    const nM=Math.max(...rawsM), nP=Math.max(...rawsP), nD=Math.max(...rawsD);
+    const fM=Math.max(...rawsM.map(v=>nM-v));
+    const fP=Math.max(...rawsP.map(v=>nP-v));
+    const fD=Math.max(...rawsD.map(v=>nD-v));
+
+    if(mode==="EXT_OK"){
+      html+=`<b>${name}</b><br>
+      MCP 屈曲 ${fM.toFixed(1)}°<br>
+      PIP 屈曲 ${fP.toFixed(1)}°<br>
+      DIP 屈曲 ${fD.toFixed(1)}°<br><br>`;
+    }else{
+      html+=`<b>${name}</b><br>
+      総運動角（TAM）：${(fM+fP+fD).toFixed(1)}°<br><br>`;
+    }
+  }
+  document.getElementById("result").innerHTML=html;
+  log("analysis finished");
+}
+
+/* ===== Geometry ===== */
+function raw(a,b,c){
+  const v1={x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};
+  const v2={x:c.x-b.x,y:c.y-b.y,z:c.z-b.z};
+  const dot=v1.x*v2.x+v1.y*v2.y+v1.z*v2.z;
+  const m=Math.hypot(v1.x,v1.y,v1.z)*Math.hypot(v2.x,v2.y,v2.z);
+  if(!m) return 0;
+  return Math.acos(Math.min(1,Math.max(-1,dot/m)))*180/Math.PI;
+}
+
+log("index initialized");
+</script>
+
+</body>
+</html>
