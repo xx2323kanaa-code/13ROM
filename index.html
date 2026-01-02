@@ -57,8 +57,8 @@ td,th{border:1px solid #555;padding:4px;text-align:center;}
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
 <script>
-/* ===== VERSION INFO ===== */
-const VERSION = "ALLINONE_12ROMn_v1.2_WAITBUFFER";
+/* ===== VERSION ===== */
+const VERSION = "ALLINONE_12ROMn_v1.1-STABLE";
 const BUILD = new Date().toISOString();
 document.getElementById("build").innerText = VERSION + " / " + BUILD;
 
@@ -69,8 +69,13 @@ function log(m){
   const s=`[${t}] ${m}`;
   LOG.push(s);
   document.getElementById("hud").innerText=m;
+  console.log(s);
 }
-function copyLog(){navigator.clipboard.writeText(LOG.join("\n"));}
+function copyLog(){
+  navigator.clipboard.writeText(LOG.join("\n"));
+}
+
+/* ===== UI ===== */
 function toggleJOA(){
   const p=document.getElementById("joaPanel");
   p.style.display=p.style.display==="none"?"block":"none";
@@ -78,7 +83,8 @@ function toggleJOA(){
 
 /* ===== Video & Hands ===== */
 const video=document.createElement("video");
-video.muted=true; video.playsInline=true;
+video.muted=true;
+video.playsInline=true;
 
 const canvas=document.createElement("canvas");
 const ctx=canvas.getContext("2d");
@@ -93,10 +99,11 @@ hands.setOptions({
   minTrackingConfidence:0.5
 });
 
-/* ===== Landmark buffer ===== */
+/* ===== Landmark Buffer ===== */
 let buffer=[];
+
 hands.onResults(res=>{
-  if(res.multiHandLandmarks){
+  if(res.multiHandLandmarks && res.multiHandLandmarks[0]){
     buffer.push(res.multiHandLandmarks[0]);
     if(buffer.length>40) buffer.shift();
   }
@@ -108,6 +115,7 @@ async function startLoop(){
   if(running) return;
   running=true;
   log("frame loop started");
+
   while(running){
     if(video.readyState>=2){
       canvas.width=video.videoWidth;
@@ -119,71 +127,87 @@ async function startLoop(){
   }
 }
 
-/* ===== WAIT BUFFER (核心) ===== */
-function waitAndAnalyze(mode){
-  if(buffer.length >= 15){
-    log(`analyze start ${mode} (frames=${buffer.length})`);
-    analyze(mode);
-  }else{
-    log(`buffer waiting... ${buffer.length}`);
-    setTimeout(()=>waitAndAnalyze(mode),300);
-  }
-}
-
 /* ===== Start Analyze ===== */
 function startAnalyze(mode){
   const file=document.getElementById("videoInput").files[0];
   if(!file){log("no video");return;}
+
   buffer=[];
   video.src=URL.createObjectURL(file);
+
   video.onloadeddata=async()=>{
     await video.play();
     startLoop();
-    waitAndAnalyze(mode);
+
+    const wait = setInterval(()=>{
+      log(`buffer waiting... ${buffer.length}`);
+      if(buffer.length>=15){
+        clearInterval(wait);
+        analyze(mode);
+      }
+    },200);
   };
 }
 
 /* ===== Analyze Core ===== */
 function analyze(mode){
+  log(`analyze start ${mode} (frames=${buffer.length})`);
+
   const group=document.querySelector('input[name="group"]:checked').value;
   const fingers = group==="thumb"
-   ? {index:[5,6,7,8],middle:[9,10,11,12]}
-   : {ring:[13,14,15,16],pinky:[17,18,19,20]};
+   ? {index:[5,6,7,8], middle:[9,10,11,12]}
+   : {ring:[13,14,15,16], pinky:[17,18,19,20]};
 
   let html="";
+
   for(const [name,ids] of Object.entries(fingers)){
-    const rawsM=[], rawsP=[], rawsD=[];
+    let MCP=[],PIP=[],DIP=[];
     for(const lm of buffer){
-      rawsM.push(raw(lm[0],lm[ids[0]],lm[ids[1]]));
-      rawsP.push(raw(lm[ids[0]],lm[ids[1]],lm[ids[2]]));
-      rawsD.push(raw(lm[ids[1]],lm[ids[2]],lm[ids[3]]));
+      const m=flex(lm[0],lm[ids[0]],lm[ids[1]]);
+      const p=flex(lm[ids[0]],lm[ids[1]],lm[ids[2]]);
+      const d=flex(lm[ids[1]],lm[ids[2]],lm[ids[3]]);
+      if(Number.isFinite(m)) MCP.push(m);
+      if(Number.isFinite(p)) PIP.push(p);
+      if(Number.isFinite(d)) DIP.push(d);
     }
-    const nM=Math.max(...rawsM), nP=Math.max(...rawsP), nD=Math.max(...rawsD);
-    const fM=Math.max(...rawsM.map(v=>nM-v));
-    const fP=Math.max(...rawsP.map(v=>nP-v));
-    const fD=Math.max(...rawsD.map(v=>nD-v));
+
+    if(MCP.length===0) continue;
+
+    const m=Math.max(...MCP);
+    const p=Math.max(...PIP);
+    const d=Math.max(...DIP);
 
     if(mode==="EXT_OK"){
       html+=`<b>${name}</b><br>
-      MCP 屈曲 ${fM.toFixed(1)}°<br>
-      PIP 屈曲 ${fP.toFixed(1)}°<br>
-      DIP 屈曲 ${fD.toFixed(1)}°<br><br>`;
+      MCP：${m.toFixed(1)}° / PIP：${p.toFixed(1)}° / DIP：${d.toFixed(1)}°<br><br>`;
     }else{
       html+=`<b>${name}</b><br>
-      総運動角（TAM）：${(fM+fP+fD).toFixed(1)}°<br><br>`;
+      総運動角（TAM）：${(m+p+d).toFixed(1)}°<br><br>`;
     }
   }
+
+  if(html===""){
+    document.getElementById("result").innerText =
+      "角度を算出できませんでした（指が十分映っていない可能性があります）";
+    log("no valid angle frames");
+    return;
+  }
+
   document.getElementById("result").innerHTML=html;
   log("analysis finished");
 }
 
 /* ===== Geometry ===== */
+function flex(a,b,c){
+  if(!a||!b||!c||a.z===undefined||b.z===undefined||c.z===undefined) return NaN;
+  return Math.max(0,180-raw(a,b,c));
+}
 function raw(a,b,c){
   const v1={x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};
   const v2={x:c.x-b.x,y:c.y-b.y,z:c.z-b.z};
   const dot=v1.x*v2.x+v1.y*v2.y+v1.z*v2.z;
   const m=Math.hypot(v1.x,v1.y,v1.z)*Math.hypot(v2.x,v2.y,v2.z);
-  if(!m) return 0;
+  if(!m) return NaN;
   return Math.acos(Math.min(1,Math.max(-1,dot/m)))*180/Math.PI;
 }
 
